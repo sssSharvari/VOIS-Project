@@ -1,159 +1,150 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
-import matplotlib.pyplot as plt
 import seaborn as sns
+import matplotlib.pyplot as plt
 
-from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, confusion_matrix
-from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, confusion_matrix
 
-# ------------------------------------
-# Streamlit config
-# ------------------------------------
-st.set_page_config(page_title="AI-Based NIDS", layout="wide")
-st.title("AI-Based Network Intrusion Detection System")
+# --------------------------------------------------
+# PAGE CONFIGURATION
+# --------------------------------------------------
+st.set_page_config(page_title="AI NIDS Dashboard", layout="wide")
 
-st.write(
-    "This project demonstrates a Machine Learning–based Intrusion Detection System "
-    "using the CIC-IDS2017 dataset. Due to dataset size constraints, the online version "
-    "runs in demo mode."
+st.title("AI-Powered Network Intrusion Detection System")
+st.markdown("""
+### Project Overview
+This system uses **Machine Learning (Random Forest Algorithm)** to analyze
+network traffic patterns.
+
+**Classification Types**
+- **Benign** → Normal network traffic  
+- **Malicious** → Attack traffic (DDoS, Scan, etc.)
+
+⚠️ *Note:* This is a **simulation-based academic prototype**, not a real packet sniffer.
+""")
+
+# --------------------------------------------------
+# DATA LOADING (SIMULATED)
+# --------------------------------------------------
+@st.cache_data
+def load_data():
+    np.random.seed(42)
+    n_samples = 5000
+
+    data = {
+        "Destination_Port": np.random.randint(1, 65535, n_samples),
+        "Flow_Duration": np.random.randint(100, 100000, n_samples),
+        "Total_Fwd_Packets": np.random.randint(1, 100, n_samples),
+        "Packet_Length_Mean": np.random.uniform(10, 1500, n_samples),
+        "Active_Mean": np.random.uniform(0, 1000, n_samples),
+        "Label": np.random.choice([0, 1], size=n_samples, p=[0.7, 0.3])
+    }
+
+    df = pd.DataFrame(data)
+
+    # Inject attack patterns
+    attack_idx = df["Label"] == 1
+    df.loc[attack_idx, "Total_Fwd_Packets"] += np.random.randint(50, 200, attack_idx.sum())
+    df.loc[attack_idx, "Flow_Duration"] = np.random.randint(1, 1000, attack_idx.sum())
+
+    return df
+
+
+df = load_data()
+
+# --------------------------------------------------
+# SIDEBAR CONTROLS
+# --------------------------------------------------
+st.sidebar.header("Control Panel")
+
+split_size = st.sidebar.slider("Training Data Size (%)", 50, 90, 80)
+n_estimators = st.sidebar.slider("Number of Trees", 10, 200, 100)
+
+# --------------------------------------------------
+# DATA PREPARATION
+# --------------------------------------------------
+X = df.drop("Label", axis=1)
+y = df["Label"]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y,
+    test_size=(100 - split_size) / 100,
+    random_state=42
 )
 
-# ------------------------------------
-# Paths
-# ------------------------------------
-DATA_PATH = "MachineLearningCSV/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv"
+# --------------------------------------------------
+# MODEL TRAINING
+# --------------------------------------------------
+st.divider()
+col_train, col_metrics = st.columns([1, 2])
 
-# ------------------------------------
-# Data loader
-# ------------------------------------
-@st.cache_data
-def load_real_data():
-    df = pd.read_csv(DATA_PATH)
-    df.columns = df.columns.str.strip()
-    df.replace([np.inf, -np.inf], np.nan, inplace=True)
-    df.dropna(inplace=True)
-    df["Label"] = df["Label"].apply(lambda x: 0 if x == "BENIGN" else 1)
-    return df
+with col_train:
+    st.subheader("1. Model Training")
 
+    if st.button("Train Model Now"):
+        with st.spinner("Training Random Forest Model..."):
+            model = RandomForestClassifier(
+                n_estimators=n_estimators,
+                random_state=42
+            )
+            model.fit(X_train, y_train)
+            st.session_state["model"] = model
+            st.success("Model trained successfully")
 
-def generate_demo_data():
-    np.random.seed(42)
-    size = 1000
-    df = pd.DataFrame({
-        "Flow Duration": np.random.randint(1, 100000, size),
-        "Total Fwd Packets": np.random.randint(1, 500, size),
-        "Total Backward Packets": np.random.randint(1, 500, size),
-        "Flow Bytes/s": np.random.rand(size) * 10000,
-        "Flow Packets/s": np.random.rand(size) * 1000,
-        "Label": np.random.choice([0, 1], size, p=[0.7, 0.3])
-    })
-    return df
+    if "model" in st.session_state:
+        st.info("Model is ready for testing")
 
-# ------------------------------------
-# Sidebar
-# ------------------------------------
-st.sidebar.header("Controls")
+# --------------------------------------------------
+# MODEL EVALUATION
+# --------------------------------------------------
+with col_metrics:
+    st.subheader("2. Performance Metrics")
 
-use_demo = st.sidebar.checkbox("Run in Demo Mode (Online Safe)", value=True)
-
-if st.sidebar.button("Load Dataset"):
-    if not use_demo and os.path.exists(DATA_PATH):
-        df = load_real_data()
-        st.session_state["mode"] = "real"
-        st.success("Real CIC-IDS2017 dataset loaded")
-    else:
-        df = generate_demo_data()
-        st.session_state["mode"] = "demo"
-        st.warning("Dataset not found. Running in DEMO mode.")
-
-    st.session_state["df"] = df
-    st.sidebar.write("Dataset shape:", df.shape)
-
-# ------------------------------------
-# Train model
-# ------------------------------------
-if st.sidebar.button("Train Model"):
-    if "df" not in st.session_state:
-        st.error("Load dataset first")
-    else:
-        df = st.session_state["df"]
-
-        X = df.drop("Label", axis=1)
-        y = df["Label"]
-
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_scaled, y, test_size=0.25, random_state=42, stratify=y
-        )
-
-        model = RandomForestClassifier(
-            n_estimators=100, random_state=42, n_jobs=-1
-        )
-        model.fit(X_train, y_train)
-
+    if "model" in st.session_state:
+        model = st.session_state["model"]
         y_pred = model.predict(X_test)
 
-        st.session_state["model"] = model
-        st.session_state["scaler"] = scaler
-        st.session_state["y_test"] = y_test
-        st.session_state["y_pred"] = y_pred
+        acc = accuracy_score(y_test, y_pred)
 
-        st.success("Model trained successfully")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Accuracy", f"{acc*100:.2f}%")
+        m2.metric("Total Samples", len(df))
+        m3.metric("Detected Attacks", int(np.sum(y_pred)))
 
-# ------------------------------------
-# Evaluation
-# ------------------------------------
-if "model" in st.session_state:
-    st.subheader("Model Evaluation")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.text("Classification Report")
-        st.text(
-            classification_report(
-                st.session_state["y_test"],
-                st.session_state["y_pred"],
-                target_names=["Benign", "Attack"]
-            )
-        )
-
-    with col2:
-        cm = confusion_matrix(
-            st.session_state["y_test"],
-            st.session_state["y_pred"]
-        )
-        fig, ax = plt.subplots()
-        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax)
-        ax.set_xlabel("Predicted")
-        ax.set_ylabel("Actual")
+        st.write("### Confusion Matrix")
+        cm = confusion_matrix(y_test, y_pred)
+        fig, ax = plt.subplots(figsize=(4, 3))
+        sns.heatmap(cm, annot=True, fmt="d", cmap="Reds", ax=ax)
         st.pyplot(fig)
 
-# ------------------------------------
-# Manual test
-# ------------------------------------
-st.subheader("Manual Traffic Test (Demo)")
+    else:
+        st.warning("Train the model first")
 
-if "model" in st.session_state:
-    features = st.session_state["df"].drop("Label", axis=1).columns
+# --------------------------------------------------
+# LIVE TRAFFIC SIMULATOR
+# --------------------------------------------------
+st.divider()
+st.subheader("3. Live Traffic Simulator (Demo)")
 
-    user_input = []
-    for f in features:
-        user_input.append(st.number_input(f, value=0.0))
+c1, c2, c3, c4 = st.columns(4)
 
-    if st.button("Detect Intrusion"):
-        input_arr = np.array(user_input).reshape(1, -1)
-        input_scaled = st.session_state["scaler"].transform(input_arr)
-        pred = st.session_state["model"].predict(input_scaled)[0]
+flow_duration = c1.number_input("Flow Duration (ms)", 0, 100000, 500)
+total_packets = c2.number_input("Total Packets", 0, 500, 100)
+packet_length = c3.number_input("Packet Length Mean", 0, 1500, 500)
+active_mean = c4.number_input("Active Mean Time", 0, 1000, 50)
 
-        if pred == 1:
-            st.error("⚠️ Attack Detected")
+if st.button("Analyze Packet"):
+    if "model" not in st.session_state:
+        st.error("Train the model first")
+    else:
+        input_data = np.array([[80, flow_duration, total_packets, packet_length, active_mean]])
+        prediction = st.session_state["model"].predict(input_data)[0]
+
+        if prediction == 1:
+            st.error("🚨 MALICIOUS TRAFFIC DETECTED")
+            st.write("Reason: Unusual packet volume and timing pattern")
         else:
-            st.success("✅ Benign Traffic")
-
+            st.success("✅ BENIGN TRAFFIC")
